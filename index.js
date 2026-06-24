@@ -3,7 +3,7 @@ const app = express();
 const cors = require('cors');
 require('dotenv').config();
 
-// 💡 Stripe Secret Key লোড করা হচ্ছে এনভায়রনমেন্ট ভেরিয়েবল থেকে
+// Stripe Secret Key লোড করা হচ্ছে এনভায়রনমেন্ট ভেরিয়েবল থেকে
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 const port = process.env.PORT || 8000;
@@ -30,7 +30,7 @@ async function run() {
     // কালেকশনস
     const lawyerCollection = database.collection("lawyers");
     const hiringCollection = database.collection("hirings");
-    const transactionCollection = database.collection("transactions"); // এডমিন অ্যানালিটিক্সের জন্য নতুন কালেকশন
+    const transactionCollection = database.collection("transactions"); 
 
     // টেস্ট রুট
     app.get('/', (req, res) => {
@@ -43,17 +43,15 @@ async function run() {
      * =================================================================
      */
 
-    // ১. Profile Create / Update (Upsert) - ফ্রন্টএন্ড ফর্মের সাথে সম্পূর্ণ সামঞ্জস্যপূর্ণ
+    // ১. Profile Create / Update (Upsert)
     app.post('/api/lawyer/profile', async (req, res) => {
       try {
         const { userId, email, name, bio, fee, specialization, image, status, isPublished, isVerified } = req.body;
 
-        // ডিফেন্সিভ কোডিং: ইমেইল এবং ইউজার আইডি দুটোই থাকা বাধ্যতামূলক
         if (!userId || !email) {
           return res.status(400).json({ success: false, error: "Missing required User ID or Email" });
         }
 
-        // 💡 আপডেট: ইমেইল এবং ইউজার আইডি দুটোর কম্বিনেশনে ফিল্টার করা হচ্ছে যাতে ডেটা ডুপ্লিকেট না হয়
         const filter = { email: email };
         
         const updateFields = { updatedAt: new Date(), userId: userId };
@@ -77,7 +75,7 @@ async function run() {
       }
     });
 
-    // ২. ড্যাশবোর্ডের জন্য প্রোফাইল খোঁজার রুট (ইমেইল দিয়ে খোঁজা হচ্ছে)
+    // ২. ড্যাশবোর্ডের জন্য প্রোফাইল খোঁজার রুট (কোয়েরি ইমেইল দিয়ে)
     app.get('/api/lawyer/profile', async (req, res) => {
       try {
         const { email } = req.query;
@@ -85,7 +83,6 @@ async function run() {
           return res.status(400).json({ success: false, error: "Email parameter required" });
         }
 
-        // 💡 সরাসরি ইমেইল এড্রেস দিয়ে প্রোফাইল খোঁজা হচ্ছে
         const profile = await lawyerCollection.findOne({ email: email });
         
         if (!profile) {
@@ -99,7 +96,23 @@ async function run() {
       }
     });
 
-    // ৩. ড্যাশবোর্ড থেকে সার্ভিস/প্রোফাইল ডিলিট করার রুট
+    // 💡 ৩. ডায়নামিক রাউট: ফ্রন্টএন্ড Details Page-এর জন্য ইমেইল দিয়ে লইয়ার খোঁজা
+    app.get('/api/lawyers/email/:email', async (req, res) => {
+      try {
+        const lawyerEmail = req.params.email;
+        const lawyer = await lawyerCollection.findOne({ email: lawyerEmail });
+        
+        if (!lawyer) {
+          return res.status(404).json({ success: false, message: "Lawyer not found" });
+        }
+        res.status(200).json(lawyer);
+      } catch (err) {
+        console.error("Error fetching lawyer by dynamic email:", err);
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+
+    // ৪. ড্যাশবোর্ড থেকে সার্ভিস/প্রোফাইল ডিলিট করার রুট
     app.delete('/api/lawyer/profile/:userId', async (req, res) => {
       try {
         const { userId } = req.params;
@@ -121,18 +134,18 @@ async function run() {
       }
     });
 
-    // ৪. সব লয়ারের ডাটা গেট করা (Browse Lawyers Page)
+    // 💡 ৫. সব লয়ারের ডাটা গেট করা (Browse Lawyers Page - সার্চ, ফিল্টার ও পেজিনেশন সামঞ্জস্য)
     app.get('/api/lawyer/all', async (req, res) => {
       try {
         const { search, specialization, minFee, maxFee, status, page, limit } = req.query;
         
-        // 💡 শুধুমাত্র Published এবং পেইড/Verified প্রোফাইলগুলোই ক্লায়েন্ট ডিরেক্টরিতে দেখাবে
         let query = { isPublished: true, isVerified: true };
 
         if (search) {
           query.$or = [
             { name: { $regex: search, $options: "i" } },
-            { bio: { $regex: search, $options: "i" } }
+            { bio: { $regex: search, $options: "i" } },
+            { specialization: { $regex: search, $options: "i" } }
           ];
         }
 
@@ -155,6 +168,7 @@ async function run() {
         const skip = (currentPage - 1) * pageLimit;
 
         const totalLawyers = await lawyerCollection.countDocuments(query);
+        const totalPages = Math.ceil(totalLawyers / pageLimit);
 
         const lawyers = await lawyerCollection
           .find(query)
@@ -165,93 +179,189 @@ async function run() {
 
         res.status(200).json({ 
           success: true, 
-          total: totalLawyers,
-          page: currentPage,
-          limit: pageLimit,
-          data: lawyers 
+          data: lawyers,
+          pagination: {
+            totalLawyers,
+            totalPages,
+            currentPage,
+            limit: pageLimit
+          }
         });
       } catch (error) {
         console.error("Error fetching all lawyers:", error);
         res.status(500).json({ success: false, error: "Internal Server Error" });
       }
     });
-// 💡 ৫. পেমেন্ট সফল হওয়ার পর ভেরিফিকেশন ও স্ট্যাটাস আপডেট (সেফটি অ্যান্ড ফলব্যাক ব্যাকড সংস্করণ)
-app.post('/api/payment/confirm', async (req, res) => {
-  try {
-    // 💡 সেফটি চেক: req.body বা req.query অবজেক্ট ডিফেন্সিভলি হ্যান্ডেল করা হলো যাতে 'undefined' এরর না আসে
-    const bodyData = req.body || {};
-    const queryData = req.query || {};
 
-    // বডি অথবা কুয়েরি—যে কোনো এক জায়গা থেকে ডাটা পেলেই তা রিসিভ করবে
-    const session_id = bodyData.session_id || queryData.session_id;
-    let email = bodyData.email || queryData.email;
-
-    if (!session_id) {
-      return res.status(400).json({ success: false, error: "Stripe Session ID is required" });
-    }
-
-    // স্ট্রাইপ সার্ভার থেকে পেমেন্ট স্ট্যাটাস কনফার্ম করা হচ্ছে
-    const session = await stripe.checkout.sessions.retrieve(session_id);
-
-    if (session.payment_status === 'paid') {
-      
-      // যদি স্ট্রাইপ মেটাডাটাতে ইমেইল থাকে, তবে সেটি ফার্স্ট প্রায়োরিটি পাবে
-      if (session.metadata && session.metadata.email) {
-        email = session.metadata.email;
-      }
-
-      if (!email || email === 'undefined' || email === 'null') {
-        return res.status(400).json({ success: false, error: "Verification failed. Associated user email could not be resolved." });
-      }
-
-      // মঙ্গোডিবি ফিল্টার - ইমেইল দিয়ে আইনজীবী খুঁজে বের করা হচ্ছে
-      const filter = { email: email }; 
-      
-      const updateDoc = {
-        $set: {
-          isVerified: true,
-          isPublished: true, 
-          paymentSessionId: session_id,
-          verifiedAt: new Date()
-        }
-      };
-
-      const result = await lawyerCollection.updateOne(filter, updateDoc);
-
-      // এডমিন ট্রানজেকশন প্যানেলের জন্য ডাটা সেভ করা (কালেকশন এক্সিস্ট না করলে মঙ্গোডিবি অটো তৈরি করে নেবে)
+    /**
+     * =================================================================
+     * PAYMENT INTEGRATION (STRIPE COMFIRMATION)
+     * =================================================================
+     */
+    app.post('/api/payment/confirm', async (req, res) => {
       try {
-        await database.collection("transactions").insertOne({
-          transactionId: session.payment_intent || session_id,
-          userEmail: email,
-          amount: session.amount_total ? (session.amount_total / 100) : 0, 
-          date: new Date(),
-          purpose: "Lawyer Profile Activation Fee"
-        });
-      } catch (transError) {
-        console.error("Optional transaction log failed:", transError);
-        // মেইন পেমেন্ট সাকসেস হলে ট্রানজেকশন লগের জন্য যেন ইউজার এরর না দেখে
-      }
+        const bodyData = req.body || {};
+        const queryData = req.query || {};
 
-      return res.status(200).json({ 
-        success: true, 
-        message: "Professional profile activated and verified successfully!",
-        data: result
-      });
-    } else {
-      return res.status(400).json({ success: false, error: "Stripe payment verification failed. Unpaid session." });
-    }
-  } catch (error) {
-    console.error("Error in payment confirmation:", error);
-    res.status(500).json({ success: false, error: "Internal Server Error" });
-  }
-});
+        const session_id = bodyData.session_id || queryData.session_id;
+        let email = bodyData.email || queryData.email;
+
+        if (!session_id) {
+          return res.status(400).json({ success: false, error: "Stripe Session ID is required" });
+        }
+
+        const session = await stripe.checkout.sessions.retrieve(session_id);
+
+        if (session.payment_status === 'paid') {
+          if (session.metadata && session.metadata.email) {
+            email = session.metadata.email;
+          }
+
+          if (!email || email === 'undefined' || email === 'null') {
+            return res.status(400).json({ success: false, error: "Email missing" });
+          }
+
+          const filter = { email: email }; 
+          const updateDoc = {
+            $set: {
+              isVerified: true,
+              isPublished: true, 
+              paymentSessionId: session_id,
+              verifiedAt: new Date()
+            }
+          };
+
+          const result = await lawyerCollection.updateOne(filter, updateDoc);
+
+          try {
+            await transactionCollection.insertOne({
+              transactionId: session.payment_intent || session_id,
+              userEmail: email,
+              amount: session.amount_total ? (session.amount_total / 100) : 0, 
+              date: new Date(),
+              purpose: "Lawyer Profile Activation Fee"
+            });
+          } catch (transError) {
+            console.error("Optional transaction log failed but profile active:", transError);
+          }
+
+          return res.status(200).json({ 
+            success: true, 
+            message: "Profile activated successfully!",
+            data: result
+          });
+        } else {
+          return res.status(400).json({ success: false, error: "Unpaid session." });
+        }
+      } catch (error) {
+        console.error("CRITICAL ERROR IN PAYMENT CONFIRM:", error);
+        res.status(500).json({ success: false, error: error.message || "Internal Server Error" });
+      }
+    });
+
+    /**
+     * =================================================================
+     * HIRING MANAGEMENT SYSTEM
+     * =================================================================
+     */
+    
+    // ১. Send Hiring Request
+    app.post('/api/hiring/request', async (req, res) => {
+      try {
+        const hiringData = req.body;
+
+        const alreadyRequested = await hiringCollection.findOne({
+          lawyerId: hiringData.lawyerId,
+          clientEmail: hiringData.clientEmail,
+          status: { $in: ["pending", "accepted"] }
+        });
+
+        if (alreadyRequested) {
+          return res.status(400).json({ 
+            success: false, 
+            error: `You already have a ${alreadyRequested.status} request for this lawyer.` 
+          });
+        }
+
+        const result = await hiringCollection.insertOne({
+          ...hiringData,
+          status: "pending", 
+          paymentStatus: "unpaid", 
+          requestDate: new Date() 
+        });
+
+        res.status(201).json({ success: true, message: "Hiring request sent successfully", data: result });
+      } catch (error) {
+        console.error("Error in hiring request:", error);
+        res.status(500).json({ success: false, error: "Internal Server Error" });
+      }
+    });
+
+    // 🌟 ২. ক্লায়েন্টের ইমেইল দিয়ে তার সব রিকোয়েস্ট হিস্ট্রি আনা (For user/hiring-history)
+    app.get('/api/hiring/client/:email', async (req, res) => {
+      try {
+        const { email } = req.params;
+        const history = await hiringCollection
+          .find({ clientEmail: email })
+          .sort({ requestDate: -1 })
+          .toArray();
+        
+        res.status(200).json({ success: true, data: history });
+      } catch (error) {
+        console.error("Error fetching client hiring history:", error);
+        res.status(500).json({ success: false, error: "Internal Server Error" });
+      }
+    });
+
+    // 🌟 ৩. লইয়ারের ইমেইল দিয়ে তার কাছে আসা সব রিকোয়েস্ট আনা (For lawyer/hiring-history)
+    app.get('/api/hiring/lawyer/:email', async (req, res) => {
+      try {
+        const { email } = req.params;
+        const requests = await hiringCollection
+          .find({ lawyerEmail: email })
+          .sort({ requestDate: -1 })
+          .toArray();
+        
+        res.status(200).json({ success: true, data: requests });
+      } catch (error) {
+        console.error("Error fetching lawyer requests:", error);
+        res.status(500).json({ success: false, error: "Internal Server Error" });
+      }
+    });
+
+    // 🌟 ৪. লইয়ার কর্তৃক রিকোয়েস্ট Accept বা Reject করার রুট 
+    app.patch('/api/hiring/update-status/:id', async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { status } = req.body; // 
+
+        if (!["accepted", "rejected"].includes(status)) {
+          return res.status(400).json({ success: false, error: "Invalid status code" });
+        }
+
+       
+        const result = await hiringCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status: status, statusUpdatedAt: new Date() } }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ success: false, error: "Hiring request not found" });
+        }
+
+        res.status(200).json({ success: true, message: `Request successfully ${status}` });
+      } catch (error) {
+        console.error("Error updating hiring status:", error);
+        res.status(500).json({ success: false, error: "Internal Server Error" });
+      }
+    });
 
     // মঙ্গোডিবি কানেকশন সাকসেস চেক
     await database.command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
 
   } catch (error) {
-    console.dir(error);
+    console.error("MongoDB Setup Error:", error);
   }
 }
 run().catch(console.dir);
