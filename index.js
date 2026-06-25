@@ -3,10 +3,10 @@ const app = express();
 const cors = require('cors');
 require('dotenv').config();
 
-// Stripe Secret Key লোড করা হচ্ছে এনভায়রনমেন্ট ভেরিয়েবল থেকে
+
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
-const port = process.env.PORT || 8000;
+const port = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors());
@@ -27,12 +27,12 @@ async function run() {
   try {
     const database = client.db("legalease_db");
     
-    // কালেকশনস
+    
     const lawyerCollection = database.collection("lawyers");
     const hiringCollection = database.collection("hirings");
     const transactionCollection = database.collection("transactions"); 
-
-    // টেস্ট রুট
+    const usersCollection = database.collection("users");
+    
     app.get('/', (req, res) => {
       res.send('LegalEase Server is Running Perfectly!');
     });
@@ -355,6 +355,89 @@ async function run() {
         res.status(500).json({ success: false, error: "Internal Server Error" });
       }
     });
+
+
+
+
+    // user ---
+
+
+
+  
+app.put('/user/:email', async (req, res) => {
+  try {
+    const email = req.params.email;
+    const user = req.body;
+    const query = { email: email };
+    const options = { upsert: true }; 
+    
+    const updateDoc = {
+      $set: {
+        name: user.name || 'Anonymous',
+        email: email,
+        image: user.image || 'https://via.placeholder.com/150',
+        role: user.role || 'user', 
+      }
+    };
+    
+    const result = await usersCollection.updateOne(query, updateDoc, options);
+    res.json(result); 
+  } catch (error) {
+    console.error("Error in PUT /user:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ৩. সিঙ্গেল ইউজারের প্রোফাইল ডাটা গেট করার এন্ডপয়েন্ট (ড্যাশবোর্ডের জন্য)
+app.get('/user/:email', async (req, res) => {
+  try {
+    const email = req.params.email;
+    const query = { email: email };
+    const user = await usersCollection.findOne(query);
+    
+    
+    if (!user) {
+      return res.status(200).json(null); 
+    }
+    
+    res.json(user); 
+  } catch (error) {
+    console.error("Error in GET /user:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ৪. প্রোফাইল আপডেট করার এন্ডপয়েন্ট (নাম ও ছবি)
+app.patch('/user/update-profile/:email', async (req, res) => {
+  try {
+    const email = req.params.email;
+    const { name, image } = req.body;
+    const filter = { email: email };
+    
+   
+    const options = { upsert: true }; 
+
+    const updatedDoc = {
+      $set: { 
+        name: name, 
+        image: image,
+        email: email 
+      }
+    };
+
+    const result = await usersCollection.updateOne(filter, updatedDoc, options);
+    res.json(result); 
+  } catch (error) {
+    console.error("Error in PATCH /user/update-profile:", error);
+    res.status(500).json({ error: "Failed to update profile" });
+  }
+});
+
+
+
+
+
+
 
     // মঙ্গোডিবি কানেকশন সাকসেস চেক
     await database.command({ ping: 1 });
