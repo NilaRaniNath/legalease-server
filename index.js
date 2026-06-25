@@ -259,6 +259,62 @@ async function run() {
       }
     });
 
+
+
+    // 🌟 নতুন রাউট: ক্লায়েন্ট পেমেন্ট সাকসেস হলে হায়ার স্ট্যাটাস এবং এডমিন ট্রানজেকশন আপডেট করা
+app.post('/api/payment/confirm-hiring', async (req, res) => {
+  try {
+    const { session_id } = req.body;
+
+    if (!session_id) {
+      return res.status(400).json({ success: false, error: "Stripe Session ID is required" });
+    }
+
+    // স্ট্রাইপ থেকে সেশন ডিটেইলস রিট্রিভ করা (সুরক্ষার জন্য ব্যাকএন্ড থেকে করা বেস্ট)
+    const session = await stripe.checkout.sessions.retrieve(session_id);
+
+    if (session.payment_status === 'paid') {
+      // আমরা Next.js এপিআই থেকে যে মেটাডাটা পাঠিয়েছিলাম তা বের করা
+      const { hiringId, clientEmail, amount } = session.metadata;
+
+      if (!hiringId) {
+        return res.status(400).json({ success: false, error: "Hiring ID missing in session metadata" });
+      }
+
+      // ক) তোমার এক্সিস্টিং hiringCollection-এ পেমেন্ট স্ট্যাটাস "paid" এ আপডেট করা
+      const updateHiring = await hiringCollection.updateOne(
+        { _id: new ObjectId(hiringId) },
+        { $set: { status: "paid", paymentStatus: "paid", paidAt: new Date() } }
+      );
+
+      // খ) এডমিন ড্যাশবোর্ডের জন্য তোমার এক্সিস্টিং transactionCollection-এ ডেটা স্টোর করা
+      // ডুপ্লিকেট এড়াতে চেক করা হচ্ছে
+      const existingTx = await transactionCollection.findOne({ transactionId: session.id });
+      
+      if (!existingTx) {
+        await transactionCollection.insertOne({
+          transactionId: session.id, // রিয়েল স্ট্রাইপ পেমেন্ট আইডি
+          userEmail: clientEmail,
+          amount: parseFloat(amount),
+          date: new Date(),
+          purpose: "Lawyer Hiring Fee" // লয়ার অ্যাক্টিভেশন ফি থেকে আলাদা চেনার জন্য
+        });
+      }
+
+      return res.status(200).json({ 
+        success: true, 
+        message: "Hiring status updated and transaction saved for admin directory!",
+        data: updateHiring
+      });
+    } else {
+      return res.status(400).json({ success: false, error: "Transaction verification pending/failed on Stripe." });
+    }
+  } catch (error) {
+    console.error("Error confirming hiring payment:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
     /**
      * =================================================================
      * HIRING MANAGEMENT SYSTEM
