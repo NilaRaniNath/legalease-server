@@ -32,6 +32,7 @@ async function run() {
     const hiringCollection = database.collection("hirings");
     const transactionCollection = database.collection("transactions"); 
     const usersCollection = database.collection("users");
+    const commentsCollection = database.collection("comments");
     
     app.get('/', (req, res) => {
       res.send('LegalEase Server is Running Perfectly!');
@@ -239,7 +240,7 @@ async function run() {
               userEmail: email,
               amount: session.amount_total ? (session.amount_total / 100) : 0, 
               date: new Date(),
-              purpose: "Lawyer Profile Activation Fee"
+              purpose: "Lawyer Profile Fee"
             });
           } catch (transError) {
             console.error("Optional transaction log failed but profile active:", transError);
@@ -270,34 +271,35 @@ app.post('/api/payment/confirm-hiring', async (req, res) => {
       return res.status(400).json({ success: false, error: "Stripe Session ID is required" });
     }
 
-    // স্ট্রাইপ থেকে সেশন ডিটেইলস রিট্রিভ করা (সুরক্ষার জন্য ব্যাকএন্ড থেকে করা বেস্ট)
     const session = await stripe.checkout.sessions.retrieve(session_id);
 
     if (session.payment_status === 'paid') {
-      // আমরা Next.js এপিআই থেকে যে মেটাডাটা পাঠিয়েছিলাম তা বের করা
-      const { hiringId, clientEmail, amount } = session.metadata;
+     
+      const { hiringId, clientEmail } = session.metadata;
+
+      
+      const actualAmount = session.amount_total ? (session.amount_total / 100) : 0;
 
       if (!hiringId) {
         return res.status(400).json({ success: false, error: "Hiring ID missing in session metadata" });
       }
 
-      // ক) তোমার এক্সিস্টিং hiringCollection-এ পেমেন্ট স্ট্যাটাস "paid" এ আপডেট করা
+      // ক) hiringCollection-এ স্ট্যাটাস আপডেট
       const updateHiring = await hiringCollection.updateOne(
         { _id: new ObjectId(hiringId) },
         { $set: { status: "paid", paymentStatus: "paid", paidAt: new Date() } }
       );
 
-      // খ) এডমিন ড্যাশবোর্ডের জন্য তোমার এক্সিস্টিং transactionCollection-এ ডেটা স্টোর করা
-      // ডুপ্লিকেট এড়াতে চেক করা হচ্ছে
+      
       const existingTx = await transactionCollection.findOne({ transactionId: session.id });
       
       if (!existingTx) {
         await transactionCollection.insertOne({
-          transactionId: session.id, // রিয়েল স্ট্রাইপ পেমেন্ট আইডি
-          userEmail: clientEmail,
-          amount: parseFloat(amount),
+          transactionId: session.id, 
+          userEmail: clientEmail || session.customer_details?.email, 
+          amount: actualAmount, 
           date: new Date(),
-          purpose: "Lawyer Hiring Fee" // লয়ার অ্যাক্টিভেশন ফি থেকে আলাদা চেনার জন্য
+          purpose: "Lawyer Hiring Fee" 
         });
       }
 
@@ -490,6 +492,118 @@ app.patch('/user/update-profile/:email', async (req, res) => {
 });
 
 
+
+
+
+// Comment section
+
+
+// ১. কমেন্ট ক্রিয়েট করার এপিআই (শুধু পেমেন্ট করা ইউজার পারবে)
+app.post("/api/comments", async (req, res) => {
+  try {
+    const { lawyerId, userEmail, userName, commentText } = req.body;
+
+    if (!lawyerId || !userEmail || !commentText) {
+      return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
+
+   
+    const hasPaidThisLawyer = await hiringCollection.findOne({
+      clientEmail: userEmail,
+      lawyerId: lawyerId, 
+      status: "paid"
+    });
+
+   
+    if (!hasPaidThisLawyer) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "You must hire this specific lawyer before leaving a review!" 
+      });
+    }
+
+    const newComment = {
+      lawyerId: lawyerId.toString(), 
+      userEmail,
+      userName,
+      commentText,
+      createdAt: new Date()
+    };
+
+    const result = await commentsCollection.insertOne(newComment);
+    res.status(201).json({ success: true, data: { ...newComment, _id: result.insertedId } });
+
+  } catch (error) {
+    console.error("Error in post comment:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ২. নির্দিষ্ট লয়ারের সব কমেন্ট গেট করার এপিআই
+app.get("/api/comments/:lawyerId", async (req, res) => {
+  try {
+    const { lawyerId } = req.params;
+    const comments = await commentsCollection
+      .find({ lawyerId: lawyerId })
+      .sort({ createdAt: -1 })
+      .toArray();
+    res.status(200).json({ success: true, data: comments });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ৩. কমেন্ট এডিট/আপডেট করার এপিআই
+app.put("/api/comments/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { commentText, userEmail } = req.body; 
+
+    
+    const comment = await commentsCollection.findOne({ _id: new ObjectId(id) });
+    if (!comment || comment.userEmail !== userEmail) {
+      return res.status(403).json({ success: false, message: "Unauthorized to edit this comment" });
+    }
+
+    await commentsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { commentText, updatedAt: new Date() } }
+    );
+
+    res.status(200).json({ success: true, message: "Comment updated successfully!" });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ৪. কমেন্ট ডিলিট করার এপিআই
+app.delete("/api/comments/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userEmail } = req.body; 
+
+    const comment = await commentsCollection.findOne({ _id: new ObjectId(id) });
+    if (!comment || comment.userEmail !== userEmail) {
+      return res.status(403).json({ success: false, message: "Unauthorized to delete this comment" });
+    }
+
+    await commentsCollection.deleteOne({ _id: new ObjectId(id) });
+    res.status(200).json({ success: true, message: "Comment deleted successfully!" });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+app.get("/api/hirings/check", async (req, res) => {
+  const { clientEmail, lawyerId } = req.query;
+  const match = await hiringCollection.findOne({
+    clientEmail,
+    lawyerId,
+    status: "paid"
+  });
+  res.json({ hasPaid: !!match });
+});
 
 
 
