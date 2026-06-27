@@ -498,23 +498,20 @@ app.patch('/user/update-profile/:email', async (req, res) => {
 // Comment section
 
 
-// ১. কমেন্ট ক্রিয়েট করার এপিআই (শুধু পেমেন্ট করা ইউজার পারবে)
+// ১. কমেন্ট পোস্ট করার এপিআই (আগেরটাই ঠিক আছে)
 app.post("/api/comments", async (req, res) => {
   try {
     const { lawyerId, userEmail, userName, commentText } = req.body;
-
     if (!lawyerId || !userEmail || !commentText) {
       return res.status(400).json({ success: false, message: "Missing required fields" });
     }
 
-   
     const hasPaidThisLawyer = await hiringCollection.findOne({
       clientEmail: userEmail,
       lawyerId: lawyerId, 
       status: "paid"
     });
 
-   
     if (!hasPaidThisLawyer) {
       return res.status(403).json({ 
         success: false, 
@@ -532,14 +529,12 @@ app.post("/api/comments", async (req, res) => {
 
     const result = await commentsCollection.insertOne(newComment);
     res.status(201).json({ success: true, data: { ...newComment, _id: result.insertedId } });
-
   } catch (error) {
-    console.error("Error in post comment:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// ২. নির্দিষ্ট লয়ারের সব কমেন্ট গেট করার এপিআই
+// ২. নির্দিষ্ট লয়ারের সব কমেন্ট গেট করার এপিআই (আগেরটাই ঠিক আছে)
 app.get("/api/comments/:lawyerId", async (req, res) => {
   try {
     const { lawyerId } = req.params;
@@ -553,13 +548,32 @@ app.get("/api/comments/:lawyerId", async (req, res) => {
   }
 });
 
-// ৩. কমেন্ট এডিট/আপডেট করার এপিআই
+// 🌟 নতুন যোগ করতে হবে: লগইন থাকা ইউজারের সব কমেন্ট গেট করার এপিআই (ড্যাশবোর্ডের জন্য)
+app.get("/api/user-comments", async (req, res) => {
+  try {
+    const { email } = req.query; 
+    if (!email) return res.status(400).json({ success: false, message: "Email required" });
+
+    const comments = await commentsCollection
+      .find({ userEmail: email })
+      .sort({ createdAt: -1 })
+      .toArray();
+    res.status(200).json({ success: true, data: comments });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ৩. কমেন্ট এডিট/আপডেট করার এপিআই (UPDATED)
 app.put("/api/comments/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const { commentText, userEmail } = req.body; 
 
-    
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid ID format" });
+    }
+
     const comment = await commentsCollection.findOne({ _id: new ObjectId(id) });
     if (!comment || comment.userEmail !== userEmail) {
       return res.status(403).json({ success: false, message: "Unauthorized to edit this comment" });
@@ -576,14 +590,18 @@ app.put("/api/comments/:id", async (req, res) => {
   }
 });
 
-// ৪. কমেন্ট ডিলিট করার এপিআই
+// ৪. কমেন্ট ডিলিট করার এপিআই (UPDATED to use Query Parameter)
 app.delete("/api/comments/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { userEmail } = req.body; 
+    const { email } = req.query; // 💡 ফিক্স: req.body এর বদলে req.query থেকে ইমেইল নেওয়া হচ্ছে
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid ID format" });
+    }
 
     const comment = await commentsCollection.findOne({ _id: new ObjectId(id) });
-    if (!comment || comment.userEmail !== userEmail) {
+    if (!comment || comment.userEmail !== email) {
       return res.status(403).json({ success: false, message: "Unauthorized to delete this comment" });
     }
 
@@ -604,6 +622,126 @@ app.get("/api/hirings/check", async (req, res) => {
   });
   res.json({ hasPaid: !!match });
 });
+
+
+// লগইন থাকা ইউজারের সব কমেন্ট গেট করার নতুন এপিআই
+app.get("/api/user-comments", async (req, res) => {
+  try {
+    const { email } = req.query; 
+    if (!email) return res.status(400).json({ success: false, message: "Email required" });
+
+    // userEmail ফিল্ড দিয়ে ডাটাবেজ থেকে ফিল্টার করা হচ্ছে
+    const comments = await commentsCollection.find({ userEmail: email }).toArray();
+    res.json({ success: true, data: comments });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+
+/**
+ * =================================================================
+ * ADMINISTRATIVE MANAGEMENT ROUTES (ADMIN ONLY)
+ * =================================================================
+ */
+
+// ক) সব ইউজারের ডাটা গেট করার এপিআই (/api/users)
+app.get('/api/users', async (req, res) => {
+  try {
+    const users = await usersCollection.find().toArray();
+    res.status(200).json({ success: true, users });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// খ) ইউজারের রোল চেঞ্জ/আপডেট করার এপিআই (/api/users/:id/role)
+app.patch('/api/users/:id/role', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { role } = req.body;
+
+    if (!["user", "lawyer", "admin"].includes(role)) {
+      return res.status(400).json({ success: false, message: "Invalid role specified" });
+    }
+
+    const result = await usersCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { role: role } }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    res.status(200).json({ success: true, message: "User role updated successfully" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// গ) ইউজার চিরতরে ডিলিট করার এপিআই (/api/users/:id)
+app.delete('/api/users/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await usersCollection.deleteOne({ _id: new ObjectId(id) });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    res.status(200).json({ success: true, message: "User deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ঘ) সব ট্র্যানজেকশন ডাটা রিকভার করার এপিআই (/api/transactions)
+app.get('/api/transactions', async (req, res) => {
+  try {
+    const transactions = await transactionCollection.find().sort({ date: -1 }).toArray();
+    res.status(200).json({ success: true, transactions });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 📊 ঙ) ড্যাশবোর্ড অ্যানালিটিক্স ওভারভিউ জেনারেট করার এন্ডপয়েন্ট (/api/admin/analytics)
+app.get('/api/admin/analytics', async (req, res) => {
+  try {
+    const totalUsers = await usersCollection.countDocuments();
+    const totalLawyers = await lawyerCollection.countDocuments({ isPublished: true });
+    const totalHires = await hiringCollection.countDocuments({ status: "paid" });
+
+    // 💡 ফিক্সড এগ্রিগেশন: সঠিক ডলার সাইন ($amount) ব্যবহার করা হলো
+    const revenueAggregation = await transactionCollection.aggregate([
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$amount" } // এখানে ওরিজিনাল কালেকশনের amount ফিল্ড যোগ হচ্ছে
+        }
+      }
+    ]).toArray();
+
+    // যদি কোনো ট্রানজেকশন না থাকে তবে ০ দেখাবে
+    const totalRevenue = revenueAggregation.length > 0 ? revenueAggregation[0].total : 0;
+
+    res.status(200).json({
+      success: true,
+      totalUsers,
+      totalLawyers,
+      totalHires,
+      totalRevenue: Number(totalRevenue).toFixed(2) // দশমিকের পর ২ ঘর রাখার জন্য নিশ্চিত করা হলো
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+
+
+
 
 
 
