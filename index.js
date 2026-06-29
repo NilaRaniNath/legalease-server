@@ -38,6 +38,14 @@ async function run() {
       res.send('LegalEase Server is Running Perfectly!');
     });
 
+    const logger =(req, res, next) =>{
+      next();
+    }
+
+    const verifyToken = ( req, res, next)=>{
+      next();
+    }
+
     /**
      * =================================================================
      * LAWYER PROFILE & SERVICE MANAGEMENT ROUTES (CRUD)
@@ -193,6 +201,45 @@ async function run() {
         res.status(500).json({ success: false, error: "Internal Server Error" });
       }
     });
+
+
+    // GET: /api/lawyer/featured
+app.get("/api/lawyer/featured", async (req, res) => {
+  try {
+    let featuredLawyers = await database.collection("lawyers")
+      .find({ isFeatured: true })
+      .limit(6)
+      .toArray();
+
+    if (featuredLawyers.length < 6) {
+      const remainingLimit = 6 - featuredLawyers.length;
+      const alreadyTakenIds = featuredLawyers.map(l => l._id);
+      
+      const latestLawyers = await database.collection("lawyers")
+        .find({ _id: { $nin: alreadyTakenIds } })
+        .sort({ createdAt: -1 }) 
+        .limit(remainingLimit)
+        .toArray();
+
+      featuredLawyers = [...featuredLawyers, ...latestLawyers];
+    }
+
+    // 💡 স্মার্ট সমাধান: রেসপন্স পাঠানোর আগে প্রতিটি লয়ার অবজেক্টে 'id' প্রোপার্টি যোগ করা হচ্ছে
+    const sanitizedLawyers = featuredLawyers.map(lawyer => ({
+      ...lawyer,
+      id: lawyer._id.toString(), // _id এর পাশাপাশি সাধারণ id ও থাকবে
+    }));
+
+    res.status(200).json({
+      success: true,
+      data: sanitizedLawyers // ম্যাপ করা ডাটা পাঠানো হচ্ছে
+    });
+
+  } catch (error) {
+    console.error("Error fetching featured lawyers:", error);
+    res.status(500).json({ success: false, error: "Internal Server Error" });
+  }
+});
 
     /**
      * =================================================================
@@ -594,7 +641,7 @@ app.put("/api/comments/:id", async (req, res) => {
 app.delete("/api/comments/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { email } = req.query; // 💡 ফিক্স: req.body এর বদলে req.query থেকে ইমেইল নেওয়া হচ্ছে
+    const { email } = req.query; 
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid ID format" });
@@ -630,7 +677,7 @@ app.get("/api/user-comments", async (req, res) => {
     const { email } = req.query; 
     if (!email) return res.status(400).json({ success: false, message: "Email required" });
 
-    // userEmail ফিল্ড দিয়ে ডাটাবেজ থেকে ফিল্টার করা হচ্ছে
+    
     const comments = await commentsCollection.find({ userEmail: email }).toArray();
     res.json({ success: true, data: comments });
   } catch (error) {
@@ -714,17 +761,17 @@ app.get('/api/admin/analytics', async (req, res) => {
     const totalLawyers = await lawyerCollection.countDocuments({ isPublished: true });
     const totalHires = await hiringCollection.countDocuments({ status: "paid" });
 
-    // 💡 ফিক্সড এগ্রিগেশন: সঠিক ডলার সাইন ($amount) ব্যবহার করা হলো
+   
     const revenueAggregation = await transactionCollection.aggregate([
       {
         $group: {
           _id: null,
-          total: { $sum: "$amount" } // এখানে ওরিজিনাল কালেকশনের amount ফিল্ড যোগ হচ্ছে
+          total: { $sum: "$amount" } 
         }
       }
     ]).toArray();
 
-    // যদি কোনো ট্রানজেকশন না থাকে তবে ০ দেখাবে
+    
     const totalRevenue = revenueAggregation.length > 0 ? revenueAggregation[0].total : 0;
 
     res.status(200).json({
@@ -732,7 +779,7 @@ app.get('/api/admin/analytics', async (req, res) => {
       totalUsers,
       totalLawyers,
       totalHires,
-      totalRevenue: Number(totalRevenue).toFixed(2) // দশমিকের পর ২ ঘর রাখার জন্য নিশ্চিত করা হলো
+      totalRevenue: Number(totalRevenue).toFixed(2) 
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -747,9 +794,9 @@ app.get('/api/admin/analytics', async (req, res) => {
 
 
 
-    // মঙ্গোডিবি কানেকশন সাকসেস চেক
-    await database.command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
+  
+    // await database.command({ ping: 1 });
+    // console.log("Pinged your deployment. You successfully connected to MongoDB!");
 
   } catch (error) {
     console.error("MongoDB Setup Error:", error);
