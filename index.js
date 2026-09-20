@@ -96,8 +96,18 @@ const io = new Server(server, {
   upgradeTimeout: 10000,
 });
 
+// Allowed frontend origins (local dev + production Vercel deployment)
+const allowedOrigins = [
+  "http://localhost:3000",
+  "https://legal-ease-two-silk.vercel.app",
+  process.env.CLIENT_URL,
+].filter(Boolean);
+
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true,
+}));
 app.use(express.json()); 
 
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
