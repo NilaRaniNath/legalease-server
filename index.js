@@ -881,7 +881,8 @@ app.post("/api/comments", validateBody(commentCreateSchema), async (req, res) =>
     const result = await commentsCollection.insertOne(newComment);
     res.status(201).json({ success: true, data: { ...newComment, _id: result.insertedId } });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error("Error in POST /api/comments:", error.message);
+    res.status(500).json({ success: false, error: error.message, message: "Failed to add comment" });
   }
 });
 
@@ -919,25 +920,41 @@ app.get("/api/user-comments", validateQuery(userCommentsQuerySchema), async (req
 app.put("/api/comments/:id", validateParams(commentIdParamSchema), validateBody(commentUpdateBodySchema), async (req, res) => {
   try {
     const { id } = req.params;
-    const { commentText, userEmail } = req.body; 
+    const { commentText, userEmail } = req.body;
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid ID format" });
     }
 
     const comment = await commentsCollection.findOne({ _id: new ObjectId(id) });
-    if (!comment || comment.userEmail !== userEmail) {
+    if (!comment) {
+      return res.status(404).json({ success: false, message: "Comment not found" });
+    }
+    if (comment.userEmail?.toLowerCase() !== userEmail?.toLowerCase()) {
       return res.status(403).json({ success: false, message: "Unauthorized to edit this comment" });
     }
 
-    await commentsCollection.updateOne(
+    const updated = await commentsCollection.updateOne(
       { _id: new ObjectId(id) },
       { $set: { commentText, updatedAt: new Date() } }
     );
 
-    res.status(200).json({ success: true, message: "Comment updated successfully!" });
+    if (updated.matchedCount === 0) {
+      return res.status(404).json({ success: false, message: "Comment not found" });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Comment updated successfully!",
+      data: { _id: id, commentText, userEmail, updatedAt: new Date() }
+    });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error("Error in PUT /api/comments/:id:", error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      message: "Failed to update comment"
+    });
   }
 });
 
@@ -945,21 +962,29 @@ app.put("/api/comments/:id", validateParams(commentIdParamSchema), validateBody(
 app.delete("/api/comments/:id", validateParams(commentIdParamSchema), validateQuery(commentDeleteQuerySchema), async (req, res) => {
   try {
     const { id } = req.params;
-    const { email } = req.query; 
+    const { email } = req.query;
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid ID format" });
     }
 
     const comment = await commentsCollection.findOne({ _id: new ObjectId(id) });
-    if (!comment || comment.userEmail !== email) {
+    if (!comment) {
+      return res.status(404).json({ success: false, message: "Comment not found" });
+    }
+    if (comment.userEmail?.toLowerCase() !== email?.toLowerCase()) {
       return res.status(403).json({ success: false, message: "Unauthorized to delete this comment" });
     }
 
     await commentsCollection.deleteOne({ _id: new ObjectId(id) });
     res.status(200).json({ success: true, message: "Comment deleted successfully!" });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error("Error in DELETE /api/comments/:id:", error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      message: "Failed to delete comment"
+    });
   }
 });
 
